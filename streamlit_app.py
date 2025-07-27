@@ -3,6 +3,7 @@ from backtest import fetch_data, breakout_strategy
 import mplfinance as mpf
 import pandas as pd
 import numpy as np
+from datetime import datetime
 
 st.set_page_config(layout="wide")
 st.title("短线突破策略回测与交易信号展示")
@@ -34,8 +35,8 @@ try:
     mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
 
     # ---------------- 时间滑动条 ------------------
-    start_date = df.index.min()
-    end_date = df.index.max()
+    start_date = df.index.min().to_pydatetime()
+    end_date = df.index.max().to_pydatetime()
     selected_range = st.slider("选择显示时间段（用于图表）",
                                min_value=start_date,
                                max_value=end_date,
@@ -54,12 +55,12 @@ try:
     sells = pd.Series(data=np.nan, index=filtered_mpf_df.index)
 
     for _, row in buy_signals.iterrows():
-        dt = row['datetime']
+        dt = pd.to_datetime(row['datetime'])
         if dt in buys.index:
             buys.at[dt] = df.loc[dt, 'low'] * 0.995
 
     for _, row in sell_signals.iterrows():
-        dt = row['datetime']
+        dt = pd.to_datetime(row['datetime'])
         if dt in sells.index:
             sells.at[dt] = df.loc[dt, 'high'] * 1.005
 
@@ -89,8 +90,12 @@ try:
     # ---------------- 交易表格 ------------------
     st.subheader("所有交易信号（含盈亏）")
     trades_display = trades[['datetime', 'trade_type', 'trade_price', 'pnl']].copy()
+
+    # 时间字段格式化（确保是 datetime）
+    trades_display['datetime'] = pd.to_datetime(trades_display['datetime'], errors='coerce')
     trades_display['datetime'] = trades_display['datetime'].dt.strftime('%Y-%m-%d %H:%M')
     trades_display['pnl'] = trades_display['pnl'].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
+
     trades_display = trades_display.rename(columns={
         'datetime': '交易时间',
         'trade_type': '交易类型',
@@ -100,4 +105,4 @@ try:
     st.dataframe(trades_display.reset_index(drop=True))
 
 except Exception as e:
-    st.error(f"运行出错: {e}")
+    st.error(f"运行出错: {type(e)}\n{e}")
