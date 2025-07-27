@@ -30,14 +30,17 @@ def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21)
     df['position'] = 0
     df.loc[df['close'] > df['ema_long'], 'position'] = 1
     df.loc[df['close'] < df['ema_short'], 'position'] = -1
+
+    # 先计算交易信号
+    df['trade_signal'] = df['position'].diff()
+
     df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
     df['equity_curve'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
 
-    # 计算交易信号，买入卖出时刻（position变化点）
-    df['trade_signal'] = df['position'].diff()
-    trades = df[df['trade_signal'] != 0][['position', 'close']]
+    trades = df[df['trade_signal'] != 0][['position', 'close', 'trade_signal']]
     trades = trades.rename(columns={'position':'position_after_trade', 'close':'trade_price'})
     trades['trade_type'] = trades['trade_signal'].apply(lambda x: 'Buy' if x > 0 else 'Sell')
     trades.index.name = 'datetime'
     trades = trades.reset_index()
     return df, trades
+
