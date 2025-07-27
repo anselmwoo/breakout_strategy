@@ -1,65 +1,83 @@
 import streamlit as st
-import plotly.graph_objs as go
-from backtest import load_data, breakout_strategy
+from backtest import fetch_data, breakout_strategy
+import mplfinance as mpf
+import pandas as pd
+import numpy as np
 
-st.title("📈 Breakout 策略回测")
-symbol = st.text_input("股票代码", value="AAPL")
-period = st.selectbox("周期", ['1mo', '3mo', '6mo'], index=1)
-interval = st.selectbox("K线周期", ['5m', '15m', '30m', '1h'], index=1)
+st.set_page_config(layout="wide")
+st.title("短线突破策略回测与交易信号展示")
 
-@st.cache_data
-def get_data(symbol, period, interval):
-    df = load_data(symbol, period, interval)
-    return breakout_strategy(df)
+with st.sidebar:
+    ticker = st.text_input("股票代码 (Ticker)", "RCAT")
+    lookback_days = st.slider("回测天数", 7, 30, 14)
+    interval = st.selectbox("时间间隔", options=['5m', '15m', '1h'], index=1)
+    rsi_window = st.slider("RSI 窗口", 7, 21, 14)
+    ema_short_window = st.slider("短期EMA窗口", 5, 20, 9)
+    ema_long_window = st.slider("长期EMA窗口", 10, 50, 21)
 
-df = get_data(symbol, period, interval)
+if lookback_days <= 7:
+    periods = ['7d']
+elif lookback_days <= 14:
+    periods = ['14d']
+else:
+    periods = ['30d']
 
-# K线图 + 信号标记
-fig = go.Figure()
+st.write(f"尝试获取股票 {ticker}，周期设置为：{periods}，时间间隔：{interval}")
 
-fig.add_trace(go.Candlestick(
-    x=df.index,
-    open=df['Open'],
-    high=df['High'],
-    low=df['Low'],
-    close=df['Close'],
-    name="K线"
-))
+try:
+    df = fetch_data(ticker, periods=periods, intervals=[interval])
+    df, trades = breakout_strategy(df, rsi_window, ema_short_window, ema_long_window)
 
-# 买入信号
-buy_signals = df[df['Signal'] == 'Buy']
-fig.add_trace(go.Scatter(
-    x=buy_signals.index,
-    y=buy_signals['Close'],
-    mode='markers',
-    marker=dict(color='green', size=10, symbol='triangle-up'),
-    name='Buy'
-))
+    df.index = pd.to_datetime(df.index)
+    mpf_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
+    mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
 
-# 卖出信号 + 盈亏标注
-sell_signals = df[df['Signal'] == 'Sell']
-fig.add_trace(go.Scatter(
-    x=sell_signals.index,
-    y=sell_signals['Close'],
-    mode='markers+text',
-    marker=dict(color='red', size=10, symbol='triangle-down'),
-    text=[f"{p:.1%}" for p in sell_signals['ProfitPct']],
-    textposition='top center',
-    name='Sell'
-))
+    # 买卖信号
+    buy_signals = trades[trades['trade_type'] == 'Buy']
+    sell_signals = trades[trades['trade_type'] == 'Sell']
 
-fig.update_layout(title=f"{symbol} Breakout 策略", xaxis_rangeslider_visible=True)
+    buys = pd.Series(data=np.nan, index=mpf_df.index)
+    sells = pd.Series(data=np.nan, index=mpf_df.index)
 
-st.plotly_chart(fig, use_container_width=True)
+    for idx, row in buy_signals.iterrows():
+        if row['datetime'] in buys.index:
+            buys.at[row['datetime']] = df.loc[row['datetime'], 'low'] * 0.995
 
-# 策略累计收益曲线
-st.subheader("📊 策略累计收益")
-cum_fig = go.Figure()
-cum_fig.add_trace(go.Scatter(
-    x=df.index,
-    y=df['CumulativeReturn'],
-    mode='lines',
-    name='Cumulative Return'
-))
-cum_fig.update_layout(yaxis_title="累积收益", xaxis_title="时间")
-st.plotly_chart(cum_fig, use_container_width=True)
+    for idx, row in sell_signals.iterrows():
+        if row['datetime'] in sells.index:
+            sells.at[row['datetime']] = df.loc[row['datetime'], 'high'] * 1.005
+
+    ap_buy = mpf.make_addplot(buys, type='scatter', markersize=100, marker='^', color='g')
+    ap_sell = mpf.make_addplot(sells, type='scatter', markersize=100, marker='v', color='r')
+
+    st.subheader("K线图 (带买卖信号标记)")
+    fig, axlist = mpf.plot(mpf_df,
+                           type='candle',
+                           style='yahoo',
+                           mav=(ema_short_window, ema_long_window),
+                           volume=True,
+                           addplot=[ap_buy, ap_sell],
+                           returnfig=True,
+                           datetime_format='%m-%d %H:%M')
+    st.pyplot(fig)
+
+    # 过滤掉无成交量时间点，绘制收益曲线
+    equity_curve_clean = df[df['volume'] > 0]['equity_curve']
+
+    st.subheader("策略累计收益曲线（去除非交易时间段）")
+    st.line_chart(equity_curve_clean)
+
+    st.subheader("所有交易信号（含盈亏）")
+    trades_display = trades[['datetime', 'trade_type', 'trade_price', 'pnl']].copy()
+    trades_display['datetime'] = trades_display['datetime'].dt.strftime('%Y-%m-%d %H:%M')
+    trades_display['pnl'] = trades_display['pnl'].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
+    trades_display = trades_display.rename(columns={
+        'datetime': '交易时间',
+        'trade_type': '交易类型',
+        'trade_price': '交易价格',
+        'pnl': '盈亏比例'
+    })
+    st.dataframe(trades_display.reset_index(drop=True))
+
+except Exception as e:
+    st.error(f"运行出错: {e}")
