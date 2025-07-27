@@ -69,7 +69,7 @@ try:
 
     # ---------------- K线图显示在页面四分之一 ------------------
     st.subheader("K线图 (带买卖信号标记)")
-    col1, col2, col3, col4 = st.columns([12, 12, 12, 12])
+    col1, col2 = st.columns([2, 2])
     with col1:
         fig, _ = mpf.plot(filtered_mpf_df,
                           type='candle',
