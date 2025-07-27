@@ -85,9 +85,11 @@ if batch_mode:
 
 # 获取数据
 @st.cache_data
+@st.cache_data
 def load_data(symbol, start, end, interval):
     df = yf.download(symbol, start=start, end=end, interval=interval)
-    df = df.dropna()
+    df.dropna(inplace=True)
+    df.columns = [col.capitalize() for col in df.columns]  # 关键：将列名标准化为首字母大写
     return df
 
 df = load_data(symbol, start, end, interval)
