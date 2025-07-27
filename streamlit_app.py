@@ -1,88 +1,65 @@
 import streamlit as st
-import yfinance as yf
-import pandas as pd
-import plotly.graph_objects as go
-from backtest import generate_signals
+import plotly.graph_objs as go
+from backtest import load_data, breakout_strategy
 
-# ---------------- Streamlit 配置 ----------------
-st.set_page_config(layout='wide')
-st.title("📈 Breakout 策略回测示例")
+st.title("📈 Breakout 策略回测")
+symbol = st.text_input("股票代码", value="AAPL")
+period = st.selectbox("周期", ['1mo', '3mo', '6mo'], index=1)
+interval = st.selectbox("K线周期", ['5m', '15m', '30m', '1h'], index=1)
 
-# ---------------- 参数设置 ----------------
-symbol = st.sidebar.text_input("股票代码", "RCAT")
-interval = st.sidebar.selectbox("时间间隔", ["1h", "30m", "15m"], index=0)
-period = st.sidebar.selectbox("历史周期", ["30d", "60d", "90d"], index=0)
-window = st.sidebar.slider("滚动窗口", 5, 50, 20)
-
-# ---------------- 获取数据 ----------------
 @st.cache_data
-def load_data(symbol, period, interval):
-    df = yf.download(symbol, period=period, interval=interval)
-    df = df[df.index.strftime('%H:%M:%S').between("09:30:00", "16:00:00")]  # 排除夜盘
-    return df
+def get_data(symbol, period, interval):
+    df = load_data(symbol, period, interval)
+    return breakout_strategy(df)
 
-df = load_data(symbol, period, interval)
+df = get_data(symbol, period, interval)
 
-if df.empty:
-    st.warning("❌ 无法获取数据，请检查股票代码或网络。")
-    st.stop()
-
-# ---------------- 生成信号与回测 ----------------
-df = generate_signals(df, window)
-
-# ---------------- 绘制 K线图与信号 ----------------
+# K线图 + 信号标记
 fig = go.Figure()
 
-# 添加 K 线
 fig.add_trace(go.Candlestick(
     x=df.index,
     open=df['Open'],
     high=df['High'],
     low=df['Low'],
     close=df['Close'],
-    name='K线'))
+    name="K线"
+))
 
-# 添加买入点
-buy_signals = df[df['trade_signal'] == 'buy']
+# 买入信号
+buy_signals = df[df['Signal'] == 'Buy']
 fig.add_trace(go.Scatter(
     x=buy_signals.index,
     y=buy_signals['Close'],
     mode='markers',
-    marker=dict(symbol='triangle-up', size=10, color='green'),
-    name='买入'))
+    marker=dict(color='green', size=10, symbol='triangle-up'),
+    name='Buy'
+))
 
-# 添加卖出点
-sell_signals = df[df['trade_signal'] == 'sell']
+# 卖出信号 + 盈亏标注
+sell_signals = df[df['Signal'] == 'Sell']
 fig.add_trace(go.Scatter(
     x=sell_signals.index,
     y=sell_signals['Close'],
-    mode='markers',
-    marker=dict(symbol='triangle-down', size=10, color='red'),
-    name='卖出'))
+    mode='markers+text',
+    marker=dict(color='red', size=10, symbol='triangle-down'),
+    text=[f"{p:.1%}" for p in sell_signals['ProfitPct']],
+    textposition='top center',
+    name='Sell'
+))
 
-fig.update_layout(title=f"{symbol} K线图（带买卖信号）",
-                  xaxis_rangeslider_visible=True,
-                  xaxis_title="时间", yaxis_title="价格",
-                  height=600)
+fig.update_layout(title=f"{symbol} Breakout 策略", xaxis_rangeslider_visible=True)
+
 st.plotly_chart(fig, use_container_width=True)
 
-# ---------------- 收益曲线图 ----------------
-equity_fig = go.Figure()
-equity_fig.add_trace(go.Scatter(
+# 策略累计收益曲线
+st.subheader("📊 策略累计收益")
+cum_fig = go.Figure()
+cum_fig.add_trace(go.Scatter(
     x=df.index,
-    y=df['equity_curve'],
+    y=df['CumulativeReturn'],
     mode='lines',
-    name='策略收益',
-    line=dict(color='blue')))
-equity_fig.update_layout(title="策略累计收益曲线",
-                         xaxis_title="时间",
-                         yaxis_title="净值",
-                         height=300)
-st.plotly_chart(equity_fig, use_container_width=True)
-
-# ---------------- 显示交易信号与盈亏 ----------------
-trades = df[df['trade_signal'].isin(['buy', 'sell'])].copy()
-trades['pct_change'] = trades['Close'].pct_change().shift(-1)
-trades['pnl'] = trades['pct_change'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) else "-")
-st.subheader("📋 交易信号列表")
-st.dataframe(trades[['trade_signal', 'Close', 'pnl']].dropna(), use_container_width=True)
+    name='Cumulative Return'
+))
+cum_fig.update_layout(yaxis_title="累积收益", xaxis_title="时间")
+st.plotly_chart(cum_fig, use_container_width=True)
