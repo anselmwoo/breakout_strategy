@@ -67,10 +67,11 @@ try:
     ap_buy = mpf.make_addplot(buys, type='scatter', markersize=100, marker='^', color='g')
     ap_sell = mpf.make_addplot(sells, type='scatter', markersize=100, marker='v', color='r')
 
-    # ---------------- K线图显示在页面四分之一 ------------------
-    st.subheader("K线图 (带买卖信号标记)")
-    col1, col2 = st.columns([2, 2])
+    # ---------------- 布局：K线图与收益曲线左右分栏 ------------------
+    col1, col2 = st.columns(2)
+    
     with col1:
+        st.subheader("K线图 (带买卖信号标记)")
         fig, _ = mpf.plot(filtered_mpf_df,
                           type='candle',
                           style='yahoo',
@@ -79,13 +80,13 @@ try:
                           addplot=[ap_buy, ap_sell],
                           returnfig=True,
                           datetime_format='%m-%d %H:%M',
-                          figsize=(18, 12))
+                          figsize=(12, 6))
         st.pyplot(fig)
-
-    # ---------------- 收益曲线 ------------------
-    equity_curve_clean = df[df['volume'] > 0]['equity_curve']
-    st.subheader("策略累计收益曲线（去除非交易时间段）")
-    st.line_chart(equity_curve_clean)
+    
+    with col2:
+        st.subheader("策略累计收益曲线（去除非交易时间段）")
+        equity_curve_clean = df[df['volume'] > 0]['equity_curve']
+        st.line_chart(equity_curve_clean)
 
     # ---------------- 交易表格 ------------------
     st.subheader("所有交易信号（含盈亏）")
