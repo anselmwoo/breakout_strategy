@@ -1,239 +1,162 @@
 import streamlit as st
-from backtest import fetch_data, breakout_strategy
-import mplfinance as mpf
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import altair as alt
+import yfinance as yf
+import plotly.graph_objects as go
+from itertools import product
 
 st.set_page_config(layout="wide")
-st.title("短线突破策略回测与交易信号展示")
 
-# ---------------- 辅助函数 ----------------
-def sharpe_ratio(returns, freq_per_year=252):
-    mean_ret = returns.mean()
-    std_ret = returns.std()
-    if std_ret == 0:
-        return 0
-    return (mean_ret / std_ret) * np.sqrt(freq_per_year)
-
+# 计算最大回撤
 def max_drawdown(equity_curve):
     roll_max = equity_curve.cummax()
     drawdown = (equity_curve - roll_max) / roll_max
     return drawdown.min()
 
-def batch_backtest(df, param_grid, include_short):
-    results = []
-    for params in param_grid:
-        rsi_w, ema_s, ema_l = params
-        df_, _ = breakout_strategy(df.copy(), rsi_w, ema_s, ema_l, include_short)
-        equity = df_['equity_curve']
-        total_return = equity.iloc[-1] - 1
-        returns = df_['strategy_returns'].dropna()
-        sharpe = sharpe_ratio(returns)
-        mdd = max_drawdown(equity)
-        results.append({
-            'RSI窗口': rsi_w,
-            'EMA短期窗口': ema_s,
-            'EMA长期窗口': ema_l,
-            '总收益率': total_return,
-            '夏普率': sharpe,
-            '最大回撤': mdd
-        })
-    return pd.DataFrame(results)
+# 计算夏普率
+def sharpe_ratio(returns):
+    if returns.std() == 0:
+        return 0
+    return (returns.mean() / returns.std()) * np.sqrt(252)
 
-# ---------------- Sidebar 参数设置 ------------------
-with st.sidebar:
-    st.header("基础参数设置")
-    ticker = st.text_input("股票代码 (Ticker)", "RCAT")
-    lookback_days = st.slider("回测天数", 7, 30, 14)
-    interval = st.selectbox("时间间隔", options=['5m', '15m', '1h'], index=1)
-    rsi_window = st.slider("RSI 窗口", 7, 21, 14)
-    ema_short_window = st.slider("短期EMA窗口", 5, 20, 9)
-    ema_long_window = st.slider("长期EMA窗口", 10, 50, 21)
-    include_short = st.checkbox("计算做空收益（双向策略）", value=True)
+# 策略回测函数
+def backtest_strategy(df, threshold, ma_window, include_short=True):
+    df = df.copy()
+    df['ma'] = df['close'].rolling(window=ma_window).mean()
+    df.dropna(inplace=True)
 
-    st.header("批量回测参数区间设置（选填）")
-    rsi_min = st.number_input("RSI窗口最小值", min_value=1, max_value=50, value=14)
-    rsi_max = st.number_input("RSI窗口最大值", min_value=1, max_value=50, value=16)
-    rsi_step = st.number_input("RSI窗口步长", min_value=1, max_value=10, value=1)
+    df['signal'] = 0
+    df.loc[df['close'] > df['ma'] * (1 + threshold), 'signal'] = 1
+    if include_short:
+        df.loc[df['close'] < df['ma'] * (1 - threshold), 'signal'] = -1
 
-    ema_short_min = st.number_input("EMA短期窗口最小值", min_value=1, max_value=50, value=9)
-    ema_short_max = st.number_input("EMA短期窗口最大值", min_value=1, max_value=50, value=11)
-    ema_short_step = st.number_input("EMA短期窗口步长", min_value=1, max_value=10, value=1)
+    df['position'] = df['signal'].shift().fillna(0)
+    df['returns'] = df['close'].pct_change().fillna(0)
+    df['strategy'] = df['position'] * df['returns']
 
-    ema_long_min = st.number_input("EMA长期窗口最小值", min_value=1, max_value=100, value=21)
-    ema_long_max = st.number_input("EMA长期窗口最大值", min_value=1, max_value=100, value=25)
-    ema_long_step = st.number_input("EMA长期窗口步长", min_value=1, max_value=20, value=1)
+    df['equity'] = (1 + df['strategy']).cumprod()
+    df['buy_hold'] = (1 + df['returns']).cumprod()
 
-    run_batch = st.button("开始批量回测")
+    return df
 
-# 根据回测天数确定period参数
-if lookback_days <= 7:
-    periods = ['7d']
-elif lookback_days <= 14:
-    periods = ['14d']
-else:
-    periods = ['30d']
+# 下载数据
+@st.cache_data
+def load_data(symbol, period, interval):
+    df = yf.download(symbol, period=period, interval=interval)
+    df.reset_index(inplace=True)
+    df.rename(columns={'Date': 'datetime'}, inplace=True)
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    df.columns = [col.lower() for col in df.columns]
+    return df
 
-st.write(f"尝试获取股票 {ticker}，周期设置为：{periods}，时间间隔：{interval}")
+# 绘制图表
+def plot_kline(df, title, buy_idx=None, sell_idx=None):
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df['datetime'], open=df['open'], high=df['high'],
+                                 low=df['low'], close=df['close'], name='K线'))
 
-# ---------------- 数据获取与策略计算 ------------------
-try:
-    df = fetch_data(ticker, periods=periods, intervals=[interval])
-    df, trades = breakout_strategy(df, rsi_window, ema_short_window, ema_long_window, include_short=include_short)
-    df.index = pd.to_datetime(df.index)
+    if buy_idx is not None:
+        fig.add_trace(go.Scatter(x=df['datetime'].iloc[buy_idx],
+                                 y=df['close'].iloc[buy_idx],
+                                 mode='markers',
+                                 marker=dict(color='green', size=8),
+                                 name='买入'))
 
-    mpf_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
-    mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+    if sell_idx is not None:
+        fig.add_trace(go.Scatter(x=df['datetime'].iloc[sell_idx],
+                                 y=df['close'].iloc[sell_idx],
+                                 mode='markers',
+                                 marker=dict(color='red', size=8),
+                                 name='卖出'))
 
-    # 时间滑动条，控制图表显示时间区间
-    start_date = df.index.min().to_pydatetime()
-    end_date = df.index.max().to_pydatetime()
-    selected_range = st.slider("选择显示时间段（用于图表）",
-                               min_value=start_date,
-                               max_value=end_date,
-                               value=(start_date, end_date),
-                               format="MM/DD HH:mm")
+    fig.update_layout(title=title, xaxis_rangeslider_visible=True, height=500)
+    return fig
 
-    filtered_df = df.loc[(df.index >= selected_range[0]) & (df.index <= selected_range[1])]
-    filtered_mpf_df = mpf_df.loc[filtered_df.index]
+def plot_equity(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['datetime'], y=df['equity'], name="策略收益", line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=df['datetime'], y=df['buy_hold'], name="持有收益", line=dict(color='orange')))
+    
+    y_data = pd.concat([df['equity'], df['buy_hold']])
+    y_min, y_max = y_data.min(), y_data.max()
+    y_margin = (y_max - y_min) * 0.05
+    fig.update_layout(title='累计收益对比', yaxis_range=[y_min - y_margin, y_max + y_margin], height=500)
+    return fig
 
-    # 买卖信号点
-    buy_signals = trades[trades['trade_type'] == 'Buy']
-    sell_signals = trades[trades['trade_type'] == 'Sell']
+# Streamlit 左侧参数
+st.sidebar.header("参数设置")
+symbol = st.sidebar.text_input("股票代码", value="RCAT")
+period = st.sidebar.selectbox("周期", ['60d', '90d', '120d'], index=0)
+interval = st.sidebar.selectbox("K线粒度", ['1h', '30m', '15m'], index=0)
 
-    buys = pd.Series(data=np.nan, index=filtered_mpf_df.index)
-    sells = pd.Series(data=np.nan, index=filtered_mpf_df.index)
+# 是否包括空头
+include_short = st.sidebar.checkbox("包括做空策略", value=True)
 
-    for _, row in buy_signals.iterrows():
-        dt = pd.to_datetime(row['datetime'])
-        if dt in buys.index:
-            buys.at[dt] = df.loc[dt, 'low'] * 0.995
+# 回测参数输入
+mode = st.sidebar.radio("模式", ["单次回测", "批量回测"])
 
-    for _, row in sell_signals.iterrows():
-        dt = pd.to_datetime(row['datetime'])
-        if dt in sells.index:
-            sells.at[dt] = df.loc[dt, 'high'] * 1.005
+df = load_data(symbol, period, interval)
 
-    ap_buy = mpf.make_addplot(buys, type='scatter', markersize=100, marker='^', color='g')
-    ap_sell = mpf.make_addplot(sells, type='scatter', markersize=100, marker='v', color='r')
+if mode == "单次回测":
+    threshold = st.sidebar.slider("突破阈值 (%)", 0.1, 5.0, 1.0) / 100
+    ma_window = st.sidebar.slider("均线窗口", 5, 60, 20)
+    result_df = backtest_strategy(df, threshold, ma_window, include_short)
 
-    # 布局分栏
     col1, col2 = st.columns(2)
-
     with col1:
-        st.subheader("K线图 (带买卖信号标记)")
-        fig, _ = mpf.plot(filtered_mpf_df,
-                          type='candle',
-                          style='yahoo',
-                          mav=(ema_short_window, ema_long_window),
-                          volume=True,
-                          addplot=[ap_buy, ap_sell],
-                          returnfig=True,
-                          datetime_format='%m-%d %H:%M',
-                          figsize=(12, 6))
-        st.pyplot(fig)
-
+        buy_signals = result_df[result_df['signal'] == 1].index
+        sell_signals = result_df[result_df['signal'] == -1].index if include_short else []
+        st.plotly_chart(plot_kline(result_df, "价格与信号", buy_signals, sell_signals), use_container_width=True)
     with col2:
-        st.subheader("策略累计收益曲线与持有收益对比")
+        st.plotly_chart(plot_equity(result_df), use_container_width=True)
 
-        # 策略累计收益（选时间段内，排除无成交量时间）
-        strategy_equity = filtered_df[filtered_df['volume'] > 0]['equity_curve']
-        strategy_equity = strategy_equity.reset_index().rename(columns={'equity_curve': '累计收益'})
+    final_return = result_df['equity'].iloc[-1] - 1
+    sharpe = sharpe_ratio(result_df['strategy'])
+    mdd = max_drawdown(result_df['equity'])
 
-        # 持有收益 = 当前收盘价 / 首日收盘价
-        hold_return = filtered_df['close'] / filtered_df['close'].iloc[0]
-        hold_return = hold_return.reset_index().rename(columns={'close': '持有收益'})
+    st.write(f"**最终收益率**: {final_return:.2%}")
+    st.write(f"**夏普率**: {sharpe:.2f}")
+    st.write(f"**最大回撤**: {mdd:.2%}")
 
-        # 合并数据
-        df_melt = pd.merge(strategy_equity, hold_return, on='datetime')
-        df_melt = df_melt.melt(id_vars=['datetime'], value_vars=['累计收益', '持有收益'],
-                               var_name='策略类型', value_name='收益')
+else:
+    st.sidebar.subheader("参数区间设置")
+    th_min, th_max, th_step = st.sidebar.slider("阈值范围 (%)", 0.1, 5.0, (0.5, 2.0))  # 输入为百分比
+    ma_min, ma_max, ma_step = st.sidebar.slider("均线窗口范围", 5, 60, (10, 30))
+    th_values = np.arange(th_min / 100, th_max / 100 + 0.0001, th_step / 100)
+    ma_values = range(ma_min, ma_max + 1, ma_step)
 
-        # 画线
-        chart = (
-            alt.Chart(df_melt)
-            .mark_line()
-            .encode(
-                x='datetime:T',
-                y=alt.Y('收益:Q', scale=alt.Scale(zero=False)),
-                color=alt.Color('策略类型:N',
-                                scale=alt.Scale(domain=['累计收益', '持有收益'],
-                                                range=['#1f77b4', '#ff7f0e']))
-            )
-            .properties(
-                width=600,
-                height=400,
-                title='策略累计收益 vs 持有收益对比'
-            )
-        )
-        st.altair_chart(chart, use_container_width=True)
-
-    # 交易信号表
-    st.subheader("所有交易信号（含盈亏）")
-    trades_display = trades[['datetime', 'trade_type', 'trade_price', 'pnl']].copy()
-    trades_display['datetime'] = pd.to_datetime(trades_display['datetime'], errors='coerce')
-    trades_display['datetime'] = trades_display['datetime'].dt.strftime('%Y-%m-%d %H:%M')
-    trades_display['pnl'] = trades_display['pnl'].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
-    trades_display = trades_display.rename(columns={
-        'datetime': '交易时间',
-        'trade_type': '交易类型',
-        'trade_price': '交易价格',
-        'pnl': '盈亏比例'
-    })
-    st.dataframe(trades_display.reset_index(drop=True))
-
-    # ---------------- 批量回测部分 ----------------
-    if run_batch:
+    results = []
+    for th, ma in product(th_values, ma_values):
         try:
-            rsi_values = list(range(rsi_min, rsi_max + 1, rsi_step))
-            ema_short_values = list(range(ema_short_min, ema_short_max + 1, ema_short_step))
-            ema_long_values = list(range(ema_long_min, ema_long_max + 1, ema_long_step))
-
-            param_grid = [
-                (rsi_w, ema_s, ema_l)
-                for rsi_w in rsi_values
-                for ema_s in ema_short_values
-                for ema_l in ema_long_values
-                if ema_s < ema_l
-            ]
-
-            if not param_grid:
-                st.warning("无有效参数组合，请调整参数区间")
-            else:
-                st.info(f"开始批量回测，参数组合数量: {len(param_grid)}")
-                results_df = batch_backtest(df, param_grid, include_short)
-
-                # 排序取Top5
-                top5 = results_df.sort_values(by='总收益率', ascending=False).head(5)
-
-                # 评分函数
-                def score_series(s, reverse=False):
-                    vmin, vmax = s.min(), s.max()
-                    if vmax == vmin:
-                        return pd.Series(50, index=s.index)
-                    norm = (s - vmin) / (vmax - vmin)
-                    return (1 - norm if reverse else norm) * 100
-
-                top5['收益得分'] = score_series(top5['总收益率'])
-                top5['夏普得分'] = score_series(top5['夏普率'])
-                top5['回撤得分'] = score_series(top5['最大回撤'], reverse=True)
-                top5['综合得分'] = (top5['收益得分'] + top5['夏普得分'] + top5['回撤得分']) / 3
-                top5 = top5.sort_values(by='综合得分', ascending=False)
-
-                st.subheader("批量回测 Top 5 参数组合")
-                st.dataframe(top5.style.format({
-                    '总收益率': '{:.2%}',
-                    '夏普率': '{:.2f}',
-                    '最大回撤': '{:.2%}',
-                    '收益得分': '{:.1f}',
-                    '夏普得分': '{:.1f}',
-                    '回撤得分': '{:.1f}',
-                    '综合得分': '{:.1f}',
-                }))
+            r_df = backtest_strategy(df, th, ma, include_short)
+            final_return = r_df['equity'].iloc[-1] - 1
+            sr = sharpe_ratio(r_df['strategy'])
+            dd = max_drawdown(r_df['equity'])
+            results.append({
+                'threshold': round(th, 4),
+                'ma_window': ma,
+                'return': final_return,
+                'sharpe': sr,
+                'max_drawdown': dd
+            })
         except Exception as e:
-            st.error(f"批量回测出错: {e}")
+            continue
 
-except Exception as e:
-    st.error(f"运行出错: {type(e)}\n{e}")
+    result_df = pd.DataFrame(results)
+    result_df['score'] = result_df['return'] * result_df['sharpe'] / abs(result_df['max_drawdown'] + 1e-5)
+    top5 = result_df.sort_values("score", ascending=False).head(5)
+    st.subheader("Top 5 参数组合")
+    st.dataframe(top5)
+
+    best_params = top5.iloc[0]
+    st.markdown(f"**最优参数组合回测**： threshold={best_params['threshold']}, ma_window={int(best_params['ma_window'])}")
+    best_df = backtest_strategy(df, best_params['threshold'], int(best_params['ma_window']), include_short)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        buy_signals = best_df[best_df['signal'] == 1].index
+        sell_signals = best_df[best_df['signal'] == -1].index if include_short else []
+        st.plotly_chart(plot_kline(best_df, "价格与信号", buy_signals, sell_signals), use_container_width=True)
+    with col2:
+        st.plotly_chart(plot_equity(best_df), use_container_width=True)
+
