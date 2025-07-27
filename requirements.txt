@@ -6,3 +6,4 @@ streamlit
 matplotlib
 setuptools>=65.0.0
 pandas-ta
+mplfinance
