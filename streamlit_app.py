@@ -85,11 +85,11 @@ if batch_mode:
 
 # 获取数据
 @st.cache_data
-def load_data(symbol, start, end, interval):
-    df = yf.download(symbol, start=start, end=end, interval=interval)
-    df.dropna(inplace=True)
-    df.columns = [str(col).capitalize() for col in df.columns]  # 兼容所有类型
-    return df
+def load_data(symbol, period, interval):
+    data = yf.download(symbol, period=period, interval=interval)
+    data = data.rename(columns={"Adj Close": "Close"})  # 确保有 Close 列
+    data = data.dropna()
+    return data
 
 
 df = load_data(symbol, start, end, interval)
