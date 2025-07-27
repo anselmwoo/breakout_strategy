@@ -31,16 +31,32 @@ def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21)
     df.loc[df['close'] > df['ema_long'], 'position'] = 1
     df.loc[df['close'] < df['ema_short'], 'position'] = -1
 
-    # 先计算交易信号
     df['trade_signal'] = df['position'].diff()
 
     df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
     df['equity_curve'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
 
     trades = df[df['trade_signal'] != 0][['position', 'close', 'trade_signal']]
-    trades = trades.rename(columns={'position':'position_after_trade', 'close':'trade_price'})
+    trades = trades.rename(columns={'position': 'position_after_trade', 'close': 'trade_price'})
     trades['trade_type'] = trades['trade_signal'].apply(lambda x: 'Buy' if x > 0 else 'Sell')
     trades.index.name = 'datetime'
     trades = trades.reset_index()
+
+    # 计算每笔交易盈亏率
+    pnl_list = []
+    buy_price = None
+    for _, row in trades.iterrows():
+        if row['trade_type'] == 'Buy':
+            buy_price = row['trade_price']
+            pnl_list.append(None)  # 买入时暂时没有盈亏
+        elif row['trade_type'] == 'Sell' and buy_price is not None:
+            pnl = (row['trade_price'] - buy_price) / buy_price
+            pnl_list.append(pnl)
+            buy_price = None  # 重置买价，准备下一笔交易
+        else:
+            pnl_list.append(None)
+    trades['pnl'] = pnl_list
+
     return df, trades
+
 
