@@ -7,6 +7,7 @@ import numpy as np
 st.set_page_config(layout="wide")
 st.title("短线突破策略回测与交易信号展示")
 
+# ---------------- Sidebar 参数设置 ------------------
 with st.sidebar:
     ticker = st.text_input("股票代码 (Ticker)", "RCAT")
     lookback_days = st.slider("回测天数", 7, 30, 14)
@@ -24,49 +25,68 @@ else:
 
 st.write(f"尝试获取股票 {ticker}，周期设置为：{periods}，时间间隔：{interval}")
 
+# ---------------- 数据获取与策略 ------------------
 try:
     df = fetch_data(ticker, periods=periods, intervals=[interval])
     df, trades = breakout_strategy(df, rsi_window, ema_short_window, ema_long_window)
-
     df.index = pd.to_datetime(df.index)
     mpf_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
     mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
 
-    # 买卖信号
+    # ---------------- 时间滑动条 ------------------
+    start_date = df.index.min()
+    end_date = df.index.max()
+    selected_range = st.slider("选择显示时间段（用于图表）",
+                               min_value=start_date,
+                               max_value=end_date,
+                               value=(start_date, end_date),
+                               format="MM/DD HH:mm")
+
+    # 过滤数据用于图表绘制
+    filtered_df = df.loc[(df.index >= selected_range[0]) & (df.index <= selected_range[1])]
+    filtered_mpf_df = mpf_df.loc[filtered_df.index]
+
+    # ---------------- 信号点处理 ------------------
     buy_signals = trades[trades['trade_type'] == 'Buy']
     sell_signals = trades[trades['trade_type'] == 'Sell']
 
-    buys = pd.Series(data=np.nan, index=mpf_df.index)
-    sells = pd.Series(data=np.nan, index=mpf_df.index)
+    buys = pd.Series(data=np.nan, index=filtered_mpf_df.index)
+    sells = pd.Series(data=np.nan, index=filtered_mpf_df.index)
 
-    for idx, row in buy_signals.iterrows():
-        if row['datetime'] in buys.index:
-            buys.at[row['datetime']] = df.loc[row['datetime'], 'low'] * 0.995
+    for _, row in buy_signals.iterrows():
+        dt = row['datetime']
+        if dt in buys.index:
+            buys.at[dt] = df.loc[dt, 'low'] * 0.995
 
-    for idx, row in sell_signals.iterrows():
-        if row['datetime'] in sells.index:
-            sells.at[row['datetime']] = df.loc[row['datetime'], 'high'] * 1.005
+    for _, row in sell_signals.iterrows():
+        dt = row['datetime']
+        if dt in sells.index:
+            sells.at[dt] = df.loc[dt, 'high'] * 1.005
 
     ap_buy = mpf.make_addplot(buys, type='scatter', markersize=100, marker='^', color='g')
     ap_sell = mpf.make_addplot(sells, type='scatter', markersize=100, marker='v', color='r')
 
+    # ---------------- K线图显示在页面四分之一 ------------------
     st.subheader("K线图 (带买卖信号标记)")
-    fig, axlist = mpf.plot(mpf_df,
-                           type='candle',
-                           style='yahoo',
-                           mav=(ema_short_window, ema_long_window),
-                           volume=True,
-                           addplot=[ap_buy, ap_sell],
-                           returnfig=True,
-                           datetime_format='%m-%d %H:%M')
-    st.pyplot(fig)
+    col1, col2, col3, col4 = st.columns([1, 3, 1, 1])
+    with col1:
+        fig, _ = mpf.plot(filtered_mpf_df,
+                          type='candle',
+                          style='yahoo',
+                          mav=(ema_short_window, ema_long_window),
+                          volume=True,
+                          addplot=[ap_buy, ap_sell],
+                          returnfig=True,
+                          datetime_format='%m-%d %H:%M',
+                          figsize=(6, 4))
+        st.pyplot(fig)
 
-    # 过滤掉无成交量时间点，绘制收益曲线
+    # ---------------- 收益曲线 ------------------
     equity_curve_clean = df[df['volume'] > 0]['equity_curve']
-
     st.subheader("策略累计收益曲线（去除非交易时间段）")
     st.line_chart(equity_curve_clean)
 
+    # ---------------- 交易表格 ------------------
     st.subheader("所有交易信号（含盈亏）")
     trades_display = trades[['datetime', 'trade_type', 'trade_price', 'pnl']].copy()
     trades_display['datetime'] = trades_display['datetime'].dt.strftime('%Y-%m-%d %H:%M')
