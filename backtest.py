@@ -70,4 +70,3 @@ def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21,
     trades['pnl'] = pnl_list
 
     return df, trades
-
