@@ -95,12 +95,12 @@ try:
             .mark_line()
             .encode(
                 x='datetime:T',
-                y='equity_curve:Q'
+                y=alt.Y('equity_curve:Q', scale=alt.Scale(zero=False))  # 这里告诉altair不强制0起点
             )
             .properties(
                 width=600,
                 height=400,
-                title='策略累计收益曲线（自动适应Y轴）'
+                title='策略累计收益曲线（Y轴自动适应，非零起点）'
             )
         )
         
