@@ -1,62 +1,67 @@
 import yfinance as yf
 import pandas as pd
-import ta
+import numpy as np
 
-def fetch_data(symbol='RCAT',
-               periods=['7d', '14d', '30d'],
-               intervals=['5m', '15m', '1h'],
-               min_length=30):
-    for period in periods:
-        for interval in intervals:
-            df = yf.download(symbol, period=period, interval=interval)
-            if df is not None and len(df) >= min_length:
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-                df.columns = ['open', 'high', 'low', 'close', 'volume']
-                print(f"成功获取数据：period={period}, interval={interval}, 行数={len(df)}")
-                return df
-            else:
-                print(f"数据不足，尝试下一组合：period={period}, interval={interval}, 行数={len(df) if df is not None else 0}")
-    raise ValueError(f"无法获取足够数据 (至少 {min_length} 行) 用于策略回测，建议更换股票或数据源")
-
-def compute_indicators(df, rsi_window=14, ema_short_window=9, ema_long_window=21):
-    df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=rsi_window).rsi()
-    df['ema_short'] = ta.trend.EMAIndicator(close=df['close'], window=ema_short_window).ema_indicator()
-    df['ema_long'] = ta.trend.EMAIndicator(close=df['close'], window=ema_long_window).ema_indicator()
-    df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+def fetch_data(ticker: str, lookback_days: int = 30, interval: str = '1h'):
+    df = yf.download(ticker, period=f"{lookback_days}d", interval=interval)
+    df = df[df['Volume'] > 0]  # 去除盘前/夜盘无量数据
+    df.dropna(inplace=True)
     return df
 
-def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21):
-    df = compute_indicators(df, rsi_window, ema_short_window, ema_long_window)
-    df['position'] = 0
-    df.loc[df['close'] > df['ema_long'], 'position'] = 1
-    df.loc[df['close'] < df['ema_short'], 'position'] = -1
+def generate_signals(df):
+    df['high_rolling'] = df['High'].rolling(window=20).max()
+    df['low_rolling'] = df['Low'].rolling(window=20).min()
 
-    df['trade_signal'] = df['position'].diff()
+    df['trade_signal'] = np.where(df['Close'] > df['high_rolling'].shift(1), 'buy',
+                          np.where(df['Close'] < df['low_rolling'].shift(1), 'sell', None))
 
-    df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
-    df['equity_curve'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
+    return df
 
-    trades = df[df['trade_signal'] != 0][['position', 'close', 'trade_signal']]
-    trades = trades.rename(columns={'position': 'position_after_trade', 'close': 'trade_price'})
-    trades['trade_type'] = trades['trade_signal'].apply(lambda x: 'Buy' if x > 0 else 'Sell')
-    trades.index.name = 'datetime'
-    trades = trades.reset_index()
+def simulate_trades(df, initial_cash=10000):
+    position = 0
+    cash = initial_cash
+    trades = []
+    equity_curve = []
 
-    # 计算每笔交易盈亏率
+    for idx, row in df.iterrows():
+        price = row['Close']
+        signal = row.get('trade_signal')
+
+        if signal == 'buy' and cash >= price:
+            qty = int(cash / price)
+            cost = qty * price
+            cash -= cost
+            position += qty
+            trades.append({'time': idx, 'action': 'buy', 'price': price, 'qty': qty})
+
+        elif signal == 'sell' and position > 0:
+            proceeds = position * price
+            cash += proceeds
+            trades.append({'time': idx, 'action': 'sell', 'price': price, 'qty': position})
+            position = 0
+
+        equity = cash + position * price
+        equity_curve.append({'time': idx, 'equity': equity})
+
+    df['equity'] = pd.Series({e['time']: e['equity'] for e in equity_curve})
+    trades_df = pd.DataFrame(trades)
+
+    # 盈亏计算
     pnl_list = []
-    buy_price = None
-    for _, row in trades.iterrows():
-        if row['trade_type'] == 'Buy':
-            buy_price = row['trade_price']
-            pnl_list.append(None)  # 买入时暂时没有盈亏
-        elif row['trade_type'] == 'Sell' and buy_price is not None:
-            pnl = (row['trade_price'] - buy_price) / buy_price
-            pnl_list.append(pnl)
-            buy_price = None  # 重置买价，准备下一笔交易
-        else:
-            pnl_list.append(None)
-    trades['pnl'] = pnl_list
+    buy_stack = []
+    for trade in trades:
+        if trade['action'] == 'buy':
+            buy_stack.append(trade)
+        elif trade['action'] == 'sell' and buy_stack:
+            entry = buy_stack.pop(0)
+            pnl = (trade['price'] - entry['price']) / entry['price']
+            pnl_list.append({
+                'buy_time': entry['time'],
+                'sell_time': trade['time'],
+                'buy_price': entry['price'],
+                'sell_price': trade['price'],
+                'return': round(pnl * 100, 2)
+            })
 
-    return df, trades
-
-
+    pnl_df = pd.DataFrame(pnl_list)
+    return df, trades_df, pnl_df
