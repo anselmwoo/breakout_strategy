@@ -25,7 +25,9 @@ def compute_indicators(df, rsi_window=14, ema_short_window=9, ema_long_window=21
     df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
     return df
 
-def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21):
+import numpy as np
+
+def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21, include_short=True):
     df = compute_indicators(df, rsi_window, ema_short_window, ema_long_window)
     df['position'] = 0
     df.loc[df['close'] > df['ema_long'], 'position'] = 1
@@ -33,10 +35,21 @@ def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21)
 
     df['trade_signal'] = df['position'].diff()
 
-    df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
+    if include_short:
+        # 多空双向收益
+        df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
+    else:
+        # 只计算多头收益，空头收益设为0
+        df['strategy_returns'] = np.where(
+            df['position'].shift(1) == 1,
+            df['close'].pct_change(),
+            0
+        )
+
     df['equity_curve'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
 
-    trades = df[df['trade_signal'] != 0][['position', 'close', 'trade_signal']]
+    # 交易明细部分保持不变
+    trades = df[df['trade_signal'] != 0][['position', 'close', 'trade_signal']].copy()
     trades = trades.rename(columns={'position': 'position_after_trade', 'close': 'trade_price'})
     trades['trade_type'] = trades['trade_signal'].apply(lambda x: 'Buy' if x > 0 else 'Sell')
     trades.index.name = 'datetime'
@@ -57,3 +70,4 @@ def breakout_strategy(df, rsi_window=14, ema_short_window=9, ema_long_window=21)
     trades['pnl'] = pnl_list
 
     return df, trades
+
