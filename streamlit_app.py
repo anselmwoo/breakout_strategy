@@ -1,151 +1,143 @@
 import streamlit as st
-from backtest import fetch_data, breakout_strategy
-import mplfinance as mpf
+import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import altair as alt
+import matplotlib.pyplot as plt
+from ta.momentum import RSIIndicator
+from ta.trend import EMAIndicator
 
-st.set_page_config(layout="wide")
-st.title("短线突破策略回测与交易信号展示")
+# 设置页面
+st.set_page_config(page_title="策略回测平台", layout="wide")
 
-# ---------------- Sidebar 参数设置 ------------------
-with st.sidebar:
-    ticker = st.text_input("股票代码 (Ticker)", "RCAT")
-    lookback_days = st.slider("回测天数", 7, 30, 14)
-    interval = st.selectbox("时间间隔", options=['5m', '15m', '1h'], index=1)
-    rsi_window = st.slider("RSI 窗口", 7, 21, 14)
-    ema_short_window = st.slider("短期EMA窗口", 5, 20, 9)
-    ema_long_window = st.slider("长期EMA窗口", 10, 50, 21)
-    include_short = st.checkbox("计算做空收益（双向策略）", value=True)  # 复选框，默认勾选
+# 技术指标函数
+def apply_indicators(df, rsi_period, ema_period):
+    df["RSI"] = RSIIndicator(close=df["Close"], window=rsi_period).rsi()
+    df["EMA"] = EMAIndicator(close=df["Close"], window=ema_period).ema_indicator()
+    return df
 
-if lookback_days <= 7:
-    periods = ['7d']
-elif lookback_days <= 14:
-    periods = ['14d']
+# 策略信号生成
+def generate_signals(df, rsi_overbought, rsi_oversold):
+    df["Signal"] = 0
+    df["Signal"] = np.where(df["RSI"] < rsi_oversold, 1, df["Signal"])  # 买入
+    df["Signal"] = np.where(df["RSI"] > rsi_overbought, -1, df["Signal"])  # 卖出
+    df["Position"] = df["Signal"].shift().fillna(0)
+    return df
+
+# 策略回测计算
+def backtest(df):
+    df["Return"] = df["Close"].pct_change()
+    df["Strategy"] = df["Return"] * df["Position"]
+    df["Cumulative Return"] = (1 + df["Return"]).cumprod()
+    df["Cumulative Strategy"] = (1 + df["Strategy"]).cumprod()
+
+    # 风险指标
+    sharpe = np.sqrt(252) * df["Strategy"].mean() / df["Strategy"].std() if df["Strategy"].std() != 0 else 0
+    drawdown = (df["Cumulative Strategy"] / df["Cumulative Strategy"].cummax()) - 1
+    max_drawdown = drawdown.min()
+
+    return df, sharpe, max_drawdown
+
+# 批量参数回测
+def parameter_grid(rsi_range, ema_range, rsi_step, ema_step, rsi_oversold, rsi_overbought, data):
+    results = []
+    for rsi_p in range(rsi_range[0], rsi_range[1]+1, rsi_step):
+        for ema_p in range(ema_range[0], ema_range[1]+1, ema_step):
+            df_temp = data.copy()
+            df_temp = apply_indicators(df_temp, rsi_p, ema_p)
+            df_temp = generate_signals(df_temp, rsi_overbought, rsi_oversold)
+            df_temp, sharpe, max_dd = backtest(df_temp)
+            final_return = df_temp["Cumulative Strategy"].iloc[-1] - 1
+            results.append({
+                "RSI": rsi_p,
+                "EMA": ema_p,
+                "Return": final_return,
+                "Sharpe": sharpe,
+                "Max Drawdown": max_dd
+            })
+    return pd.DataFrame(results).sort_values("Return", ascending=False)
+
+# 左侧栏：输入
+st.sidebar.header("参数设置")
+
+symbol = st.sidebar.text_input("股票代码", value="AMD")
+start = st.sidebar.date_input("开始日期", pd.to_datetime("2023-01-01"))
+end = st.sidebar.date_input("结束日期", pd.to_datetime("today"))
+interval = st.sidebar.selectbox("K线周期", ["1d", "1h", "15m", "5m"], index=0)
+
+# 单次回测参数
+st.sidebar.subheader("策略参数")
+rsi_period = st.sidebar.number_input("RSI周期", 5, 50, 14)
+ema_period = st.sidebar.number_input("EMA周期", 5, 100, 20)
+rsi_oversold = st.sidebar.slider("超卖阈值", 0, 50, 30)
+rsi_overbought = st.sidebar.slider("超买阈值", 50, 100, 70)
+
+# 回测模式开关
+batch_mode = st.sidebar.checkbox("启用批量参数回测")
+
+if batch_mode:
+    st.sidebar.subheader("参数区间设置")
+    rsi_start = st.sidebar.number_input("RSI开始", 5, 50, 10)
+    rsi_end = st.sidebar.number_input("RSI结束", 10, 80, 20)
+    rsi_step = st.sidebar.number_input("RSI步长", 1, 20, 2)
+    ema_start = st.sidebar.number_input("EMA开始", 5, 50, 10)
+    ema_end = st.sidebar.number_input("EMA结束", 10, 100, 30)
+    ema_step = st.sidebar.number_input("EMA步长", 1, 20, 5)
+
+# 获取数据
+@st.cache_data
+def load_data(symbol, start, end, interval):
+    df = yf.download(symbol, start=start, end=end, interval=interval)
+    df = df.dropna()
+    return df
+
+df = load_data(symbol, start, end, interval)
+
+st.title(f"{symbol} 策略回测可视化")
+
+if batch_mode:
+    st.subheader("📊 批量参数回测结果")
+    result_df = parameter_grid(
+        rsi_range=(rsi_start, rsi_end),
+        ema_range=(ema_start, ema_end),
+        rsi_step=rsi_step,
+        ema_step=ema_step,
+        rsi_oversold=rsi_oversold,
+        rsi_overbought=rsi_overbought,
+        data=df
+    )
+    st.dataframe(result_df.head(10).style.background_gradient(cmap="YlGn"))
+    st.markdown("**Top 5 策略组合图：**")
+
+    for idx, row in result_df.head(5).iterrows():
+        st.markdown(f"**RSI: {row['RSI']} | EMA: {row['EMA']} | Return: {row['Return']:.2%} | Sharpe: {row['Sharpe']:.2f} | MaxDD: {row['Max Drawdown']:.2%}**")
 else:
-    periods = ['30d']
+    df = apply_indicators(df, rsi_period, ema_period)
+    df = generate_signals(df, rsi_overbought, rsi_oversold)
+    df, sharpe, max_dd = backtest(df)
 
-st.write(f"尝试获取股票 {ticker}，周期设置为：{periods}，时间间隔：{interval}")
+    st.subheader("📈 策略 vs 持有 收益曲线")
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(df.index, df["Cumulative Strategy"], label="策略收益", color="green")
+    ax.plot(df.index, df["Cumulative Return"], label="持有收益", color="gray", linestyle="--")
+    ax.set_ylabel("累计收益")
+    ax.set_title(f"策略累计收益（Sharpe: {sharpe:.2f}, Max DD: {max_dd:.2%}）")
+    ax.legend()
+    st.pyplot(fig)
 
-# ---------------- 数据获取与策略 ------------------
-try:
-    df = fetch_data(ticker, periods=periods, intervals=[interval])
-    # 传递 include_short 参数，控制是否计算做空收益
-    df, trades = breakout_strategy(df, rsi_window, ema_short_window, ema_long_window, include_short=include_short)
-    df.index = pd.to_datetime(df.index)
-    mpf_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
-    mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+    st.subheader("💹 K线图 + 信号")
+    import plotly.graph_objects as go
+    fig2 = go.Figure(data=[go.Candlestick(
+        x=df.index, open=df['Open'], high=df['High'],
+        low=df['Low'], close=df['Close'], name="K线")])
+    buy_signals = df[df["Signal"] == 1]
+    sell_signals = df[df["Signal"] == -1]
+    fig2.add_trace(go.Scatter(x=buy_signals.index, y=buy_signals["Close"],
+                              mode='markers', marker=dict(color='green', size=8), name="买入"))
+    fig2.add_trace(go.Scatter(x=sell_signals.index, y=sell_signals["Close"],
+                              mode='markers', marker=dict(color='red', size=8), name="卖出"))
+    st.plotly_chart(fig2, use_container_width=True)
 
-    # ---------------- 时间滑动条 ------------------
-    start_date = df.index.min().to_pydatetime()
-    end_date = df.index.max().to_pydatetime()
-    selected_range = st.slider("选择显示时间段（用于图表）",
-                               min_value=start_date,
-                               max_value=end_date,
-                               value=(start_date, end_date),
-                               format="MM/DD HH:mm")
+    st.subheader("📄 交易明细")
+    trade_log = df[df["Signal"] != 0][["Close", "Signal"]]
+    st.dataframe(trade_log.tail(10))
 
-    # 过滤数据用于图表绘制
-    filtered_df = df.loc[(df.index >= selected_range[0]) & (df.index <= selected_range[1])]
-    filtered_mpf_df = mpf_df.loc[filtered_df.index]
-
-    # ---------------- 信号点处理 ------------------
-    buy_signals = trades[trades['trade_type'] == 'Buy']
-    sell_signals = trades[trades['trade_type'] == 'Sell']
-
-    buys = pd.Series(data=np.nan, index=filtered_mpf_df.index)
-    sells = pd.Series(data=np.nan, index=filtered_mpf_df.index)
-
-    for _, row in buy_signals.iterrows():
-        dt = pd.to_datetime(row['datetime'])
-        if dt in buys.index:
-            buys.at[dt] = df.loc[dt, 'low'] * 0.995
-
-    for _, row in sell_signals.iterrows():
-        dt = pd.to_datetime(row['datetime'])
-        if dt in sells.index:
-            sells.at[dt] = df.loc[dt, 'high'] * 1.005
-
-    ap_buy = mpf.make_addplot(buys, type='scatter', markersize=100, marker='^', color='g')
-    ap_sell = mpf.make_addplot(sells, type='scatter', markersize=100, marker='v', color='r')
-
-    # ---------------- 布局：K线图与收益曲线左右分栏 ------------------
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("K线图 (带买卖信号标记)")
-        fig, _ = mpf.plot(filtered_mpf_df,
-                          type='candle',
-                          style='yahoo',
-                          mav=(ema_short_window, ema_long_window),
-                          volume=True,
-                          addplot=[ap_buy, ap_sell],
-                          returnfig=True,
-                          datetime_format='%m-%d %H:%M',
-                          figsize=(12, 6))
-        st.pyplot(fig)
-    
-    with col2:
-        st.subheader("策略累计收益曲线 vs 持有收益对比")
-        
-        # 策略累计收益（剔除无成交量的时间段）
-        equity_curve_clean = filtered_df[filtered_df['volume'] > 0][['equity_curve', 'close']].copy()
-        equity_curve_clean = equity_curve_clean.reset_index()
-        equity_curve_clean.columns = ['datetime', 'equity_curve', 'close']
-
-        # 计算持有至今收益曲线（基准为首条close）
-        equity_curve_clean['hold_return'] = equity_curve_clean['close'] / equity_curve_clean['close'].iloc[0]
-
-        # 转成长格式，方便Altair绘图
-        df_melt = equity_curve_clean.melt(
-            id_vars=['datetime'], 
-            value_vars=['equity_curve', 'hold_return'], 
-            var_name='策略类型', 
-            value_name='累计收益'
-        )
-
-        # 美化策略类型显示名称
-        df_melt['策略类型'] = df_melt['策略类型'].map({
-            'equity_curve': '策略收益',
-            'hold_return': '持有收益'
-        })
-
-        chart = (
-            alt.Chart(df_melt)
-            .mark_line()
-            .encode(
-                x='datetime:T',
-                y=alt.Y('累计收益:Q', scale=alt.Scale(zero=False)),
-                color=alt.Color('策略类型:N',
-                        scale=alt.Scale(domain=['策略收益', '持有收益'],
-                                        range=['#1f77b4', '#ff7f0e']))  # 蓝色和橙色，你可以换成自己喜欢的16进制颜色码
-            )
-            .properties(
-                width=600,
-                height=400,
-                title='策略累计收益 vs 持有收益对比'
-            )
-        )
-        st.altair_chart(chart, use_container_width=True)
-
-
-    # ---------------- 交易表格 ------------------
-    st.subheader("所有交易信号（含盈亏）")
-    trades_display = trades[['datetime', 'trade_type', 'trade_price', 'pnl']].copy()
-
-    # 时间字段格式化（确保是 datetime）
-    trades_display['datetime'] = pd.to_datetime(trades_display['datetime'], errors='coerce')
-    trades_display['datetime'] = trades_display['datetime'].dt.strftime('%Y-%m-%d %H:%M')
-    trades_display['pnl'] = trades_display['pnl'].apply(lambda x: f"{x:.2%}" if pd.notnull(x) else "")
-
-    trades_display = trades_display.rename(columns={
-        'datetime': '交易时间',
-        'trade_type': '交易类型',
-        'trade_price': '交易价格',
-        'pnl': '盈亏比例'
-    })
-    st.dataframe(trades_display.reset_index(drop=True))
-
-except Exception as e:
-    st.error(f"运行出错: {type(e)}\n{e}")
