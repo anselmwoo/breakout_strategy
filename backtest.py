@@ -2,7 +2,7 @@ import pandas as pd
 import yfinance as yf
 import ta
 
-def fetch_data(symbol='RCAT', period='90d', interval='15m'):
+def fetch_data(symbol='RCAT', period='90d', interval='1h'):
     df = yf.download(symbol, period=period, interval=interval)
     df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
     df.columns = ['open', 'high', 'low', 'close', 'volume']
