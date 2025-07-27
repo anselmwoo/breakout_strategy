@@ -11,8 +11,8 @@ st.set_page_config(page_title="策略回测平台", layout="wide")
 
 # 技术指标函数
 def apply_indicators(df, rsi_period, ema_period):
-    df["RSI"] = RSIIndicator(close=df["close"], window=rsi_period).rsi()
-    df["EMA"] = EMAIndicator(close=df["close"], window=ema_period).ema_indicator()
+    df["RSI"] = RSIIndicator(close=df["Close"], window=rsi_period).rsi()
+    df["EMA"] = EMAIndicator(close=df["Close"], window=ema_period).ema_indicator()
     return df
 
 # 策略信号生成
@@ -90,8 +90,8 @@ def load_data(symbol, start_date, end_date, interval):
     df = df.dropna()
     # 确保列名规范
     df = df.rename(columns={
-        'Open': 'open', 'High': 'high', 'Low': 'low',
-        'Close': 'close', 'Volume': 'volume'
+        'Open': 'Open', 'High': 'High', 'Low': 'Low',
+        'Adj Close': 'Close', 'Volume': 'Volume'
     })
     return df
 
