@@ -79,7 +79,7 @@ try:
                           addplot=[ap_buy, ap_sell],
                           returnfig=True,
                           datetime_format='%m-%d %H:%M',
-                          figsize=(6, 4))
+                          figsize=(18, 12))
         st.pyplot(fig)
 
     # ---------------- 收益曲线 ------------------
