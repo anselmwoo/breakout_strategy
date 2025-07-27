@@ -11,8 +11,8 @@ st.set_page_config(page_title="策略回测平台", layout="wide")
 
 # 技术指标函数
 def apply_indicators(df, rsi_period, ema_period):
-    df["RSI"] = RSIIndicator(close=df["Close"], window=rsi_period).rsi()
-    df["EMA"] = EMAIndicator(close=df["Close"], window=ema_period).ema_indicator()
+    df["RSI"] = RSIIndicator(close=df["close"], window=rsi_period).rsi()
+    df["EMA"] = EMAIndicator(close=df["close"], window=ema_period).ema_indicator()
     return df
 
 # 策略信号生成
