@@ -117,7 +117,9 @@ try:
             .encode(
                 x='datetime:T',
                 y=alt.Y('累计收益:Q', scale=alt.Scale(zero=False)),
-                color='策略类型:N'
+                color=alt.Color('策略类型:N',
+                        scale=alt.Scale(domain=['策略收益', '持有收益'],
+                                        range=['#1f77b4', '#ff7f0e']))  # 蓝色和橙色，你可以换成自己喜欢的16进制颜色码
             )
             .properties(
                 width=600,
