@@ -8,12 +8,22 @@ def fetch_data(ticker: str, lookback_days: int = 30, interval: str = '1h'):
     df.dropna(inplace=True)
     return df
 
-def generate_signals(df):
-    df['high_rolling'] = df['High'].rolling(window=20).max()
-    df['low_rolling'] = df['Low'].rolling(window=20).min()
+
+def generate_signals(df, window=20):
+    df['high_rolling'] = df['High'].rolling(window).max()
+    df['low_rolling'] = df['Low'].rolling(window).min()
 
     df['trade_signal'] = np.where(df['Close'] > df['high_rolling'].shift(1), 'buy',
-                          np.where(df['Close'] < df['low_rolling'].shift(1), 'sell', None))
+                           np.where(df['Close'] < df['low_rolling'].shift(1), 'sell', np.nan))
+
+    df['position'] = 0
+    df.loc[df['trade_signal'] == 'buy', 'position'] = 1
+    df.loc[df['trade_signal'] == 'sell', 'position'] = 0
+    df['position'] = df['position'].ffill().fillna(0)
+
+    df['returns'] = df['Close'].pct_change()
+    df['strategy'] = df['position'].shift(1) * df['returns']
+    df['equity_curve'] = (1 + df['strategy']).cumprod()
 
     return df
 
