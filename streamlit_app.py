@@ -87,25 +87,44 @@ try:
         st.pyplot(fig)
     
     with col2:
-        st.subheader("策略累计收益曲线（去除非交易时间段）")
-        equity_curve_clean = df[df['volume'] > 0]['equity_curve']
-        equity_curve_clean = df[df['volume'] > 0]['equity_curve'].reset_index()
-        equity_curve_clean.columns = ['datetime', 'equity_curve']
+        st.subheader("策略累计收益曲线 vs 持有收益对比")
         
+        # 策略累计收益（剔除无成交量的时间段）
+        equity_curve_clean = filtered_df[filtered_df['volume'] > 0][['equity_curve', 'close']].copy()
+        equity_curve_clean = equity_curve_clean.reset_index()
+        equity_curve_clean.columns = ['datetime', 'equity_curve', 'close']
+
+        # 计算持有至今收益曲线（基准为首条close）
+        equity_curve_clean['hold_return'] = equity_curve_clean['close'] / equity_curve_clean['close'].iloc[0]
+
+        # 转成长格式，方便Altair绘图
+        df_melt = equity_curve_clean.melt(
+            id_vars=['datetime'], 
+            value_vars=['equity_curve', 'hold_return'], 
+            var_name='策略类型', 
+            value_name='累计收益'
+        )
+
+        # 美化策略类型显示名称
+        df_melt['策略类型'] = df_melt['策略类型'].map({
+            'equity_curve': '策略收益',
+            'hold_return': '持有收益'
+        })
+
         chart = (
-            alt.Chart(equity_curve_clean)
+            alt.Chart(df_melt)
             .mark_line()
             .encode(
                 x='datetime:T',
-                y=alt.Y('equity_curve:Q', scale=alt.Scale(zero=False))  # 这里告诉altair不强制0起点
+                y=alt.Y('累计收益:Q', scale=alt.Scale(zero=False)),
+                color='策略类型:N'
             )
             .properties(
                 width=600,
                 height=400,
-                title='策略累计收益曲线（Y轴自动适应，非零起点）'
+                title='策略累计收益 vs 持有收益对比'
             )
         )
-        
         st.altair_chart(chart, use_container_width=True)
 
 
