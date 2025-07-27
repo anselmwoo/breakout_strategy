@@ -1,33 +1,29 @@
-import yfinance as yf
 import pandas as pd
-import talib
-from config import *
+import pandas_ta as ta
+import yfinance as yf
 
-def fetch_data(ticker, days):
-    df = yf.download(ticker, period=f"{days}d", interval='1h')
-    df.dropna(inplace=True)
+def fetch_data(symbol='RCAT', period='90d', interval='15m'):
+    df = yf.download(symbol, period=period, interval=interval)
+    df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+    df.columns = ['open', 'high', 'low', 'close', 'volume']
     return df
 
 def compute_indicators(df):
-    df['ATR'] = talib.ATR(df['High'], df['Low'], df['Close'], timeperiod=14)
-    df['SMA'] = talib.SMA(df['Close'], timeperiod=20)
+    # 计算短期和长期简单移动平均线
+    df['ma_short'] = ta.sma(df['close'], length=20)
+    df['ma_long'] = ta.sma(df['close'], length=50)
+    # 计算ATR指标用于波动率评估
+    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     return df
 
 def breakout_strategy(df):
-    position = 0
-    buy_price = 0
-    trades = []
-
-    for i in range(1, len(df)):
-        if position == 0 and df['High'][i] > df['High'][i-1] * breakout_threshold:
-            position = trade_size
-            buy_price = df['Close'][i]
-            trades.append(('buy', df.index[i], buy_price))
-        elif position > 0:
-            if df['Close'][i] >= buy_price * take_profit:
-                trades.append(('sell_tp', df.index[i], df['Close'][i]))
-                position = 0
-            elif df['Close'][i] <= buy_price * stop_loss:
-                trades.append(('sell_sl', df.index[i], df['Close'][i]))
-                position = 0
-    return trades
+    df = compute_indicators(df)
+    df['position'] = 0
+    # 当价格突破长期均线时买入
+    df.loc[df['close'] > df['ma_long'], 'position'] = 1
+    # 当价格跌破短期均线时卖出（空仓）
+    df.loc[df['close'] < df['ma_short'], 'position'] = -1
+    # 计算策略每日收益（持仓乘以价格变化率）
+    df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
+    df['equity_curve'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
+    return df
