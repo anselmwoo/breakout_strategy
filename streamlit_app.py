@@ -148,4 +148,4 @@ try:
     st.dataframe(trades_display.reset_index(drop=True))
 
 except Exception as e:
-    st.error(f"运行出错: {type(e)}\n{e}"
+    st.error(f"运行出错: {type(e)}\n{e}")
