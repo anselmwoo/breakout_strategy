@@ -3,7 +3,6 @@ from backtest import fetch_data, breakout_strategy
 import mplfinance as mpf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide")
 st.title("短线突破策略回测与交易信号展示")
@@ -33,27 +32,25 @@ try:
     mpf_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
     mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
 
-    # 买卖信号对应的索引和价格，准备箭头数据
+    # 买卖信号
     buy_signals = trades[trades['trade_type'] == 'Buy']
     sell_signals = trades[trades['trade_type'] == 'Sell']
 
-    # 构造散点图数据，索引对齐K线
     buys = pd.Series(data=np.nan, index=mpf_df.index)
     sells = pd.Series(data=np.nan, index=mpf_df.index)
 
     for idx, row in buy_signals.iterrows():
         if row['datetime'] in buys.index:
-            buys.at[row['datetime']] = df.loc[row['datetime'], 'low'] * 0.995  # 买点箭头稍低于最低价
+            buys.at[row['datetime']] = df.loc[row['datetime'], 'low'] * 0.995
 
     for idx, row in sell_signals.iterrows():
         if row['datetime'] in sells.index:
-            sells.at[row['datetime']] = df.loc[row['datetime'], 'high'] * 1.005  # 卖点箭头稍高于最高价
+            sells.at[row['datetime']] = df.loc[row['datetime'], 'high'] * 1.005
 
     ap_buy = mpf.make_addplot(buys, type='scatter', markersize=100, marker='^', color='g')
     ap_sell = mpf.make_addplot(sells, type='scatter', markersize=100, marker='v', color='r')
 
     st.subheader("K线图 (带买卖信号标记)")
-
     fig, axlist = mpf.plot(mpf_df,
                            type='candle',
                            style='yahoo',
@@ -64,8 +61,11 @@ try:
                            datetime_format='%m-%d %H:%M')
     st.pyplot(fig)
 
-    st.subheader("策略累计收益曲线")
-    st.line_chart(df['equity_curve'])
+    # 过滤掉无成交量时间点，绘制收益曲线
+    equity_curve_clean = df[df['volume'] > 0]['equity_curve']
+
+    st.subheader("策略累计收益曲线（去除非交易时间段）")
+    st.line_chart(equity_curve_clean)
 
     st.subheader("所有交易信号（含盈亏）")
     trades_display = trades[['datetime', 'trade_type', 'trade_price', 'pnl']].copy()
