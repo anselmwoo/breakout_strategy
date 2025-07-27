@@ -4,6 +4,7 @@ import mplfinance as mpf
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import altair as alt
 
 st.set_page_config(layout="wide")
 st.title("短线突破策略回测与交易信号展示")
@@ -86,7 +87,25 @@ try:
     with col2:
         st.subheader("策略累计收益曲线（去除非交易时间段）")
         equity_curve_clean = df[df['volume'] > 0]['equity_curve']
-        st.line_chart(equity_curve_clean)
+        equity_curve_clean = df[df['volume'] > 0]['equity_curve'].reset_index()
+        equity_curve_clean.columns = ['datetime', 'equity_curve']
+        
+        chart = (
+            alt.Chart(equity_curve_clean)
+            .mark_line()
+            .encode(
+                x='datetime:T',
+                y='equity_curve:Q'
+            )
+            .properties(
+                width=600,
+                height=400,
+                title='策略累计收益曲线（自动适应Y轴）'
+            )
+        )
+        
+        st.altair_chart(chart, use_container_width=True)
+
 
     # ---------------- 交易表格 ------------------
     st.subheader("所有交易信号（含盈亏）")
