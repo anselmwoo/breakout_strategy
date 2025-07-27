@@ -17,6 +17,7 @@ with st.sidebar:
     rsi_window = st.slider("RSI 窗口", 7, 21, 14)
     ema_short_window = st.slider("短期EMA窗口", 5, 20, 9)
     ema_long_window = st.slider("长期EMA窗口", 10, 50, 21)
+    include_short = st.checkbox("计算做空收益（双向策略）", value=True)  # 复选框，默认勾选
 
 if lookback_days <= 7:
     periods = ['7d']
