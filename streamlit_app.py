@@ -31,7 +31,8 @@ st.write(f"尝试获取股票 {ticker}，周期设置为：{periods}，时间间
 # ---------------- 数据获取与策略 ------------------
 try:
     df = fetch_data(ticker, periods=periods, intervals=[interval])
-    df, trades = breakout_strategy(df, rsi_window, ema_short_window, ema_long_window)
+    # 传递 include_short 参数，控制是否计算做空收益
+    df, trades = breakout_strategy(df, rsi_window, ema_short_window, ema_long_window, include_short=include_short)
     df.index = pd.to_datetime(df.index)
     mpf_df = df[['open', 'high', 'low', 'close', 'volume']].copy()
     mpf_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
