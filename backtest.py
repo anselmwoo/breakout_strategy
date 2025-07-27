@@ -39,9 +39,3 @@ def breakout_strategy(df):
     df['strategy_returns'] = df['position'].shift(1) * df['close'].pct_change()
     df['equity_curve'] = (1 + df['strategy_returns'].fillna(0)).cumprod()
     return df
-
-if __name__ == "__main__":
-    symbol = 'RCAT'
-    df = fetch_data(symbol)
-    df = breakout_strategy(df)
-    print(df[['close', 'ema_short', 'ema_long', 'position', 'strategy_returns', 'equity_curve']].tail())
